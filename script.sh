@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# BookWorm HTB Machine Installation Script
+# DevOps-Playground HTB Machine Installation Script
 # OS: Ubuntu Server 22.04 LTS
 # Machine Type: Easy
 # Author: HTB Machine Creator
 
 set -e
 
-echo "=================================================="
-echo "BookWorm HTB Machine Installation Script"
-echo "=================================================="
+echo "=========================================================="
+echo "DevOps-Playground HTB Machine Installation Script"
+echo "=========================================================="
 echo "This script will configure Ubuntu Server 22.04 LTS"
-echo "for the BookWorm HTB machine."
+echo "for the DevOps-Playground HTB machine."
 echo ""
 
 # Color codes for output
@@ -22,19 +22,19 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${BLUE}[*]${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo -e "${GREEN}[+]${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}[!]${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[-]${NC} $1"
 }
 
 # Check if running as root
@@ -43,16 +43,17 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-print_status "Starting BookWorm machine setup..."
+print_status "Starting DevOps-Playground machine setup..."
 
-# 1. System Updates and Basic Configuration
+# 1. System Updates
 print_status "Updating system packages..."
+export DEBIAN_FRONTEND=noninteractive
 apt update && apt upgrade -y
 
 # Set hostname
-print_status "Setting hostname to bookworm..."
-hostnamectl set-hostname bookworm
-echo "127.0.1.1 bookworm.htb bookworm" >> /etc/hosts
+print_status "Setting hostname to devops-playground..."
+hostnamectl set-hostname devops-playground
+echo "127.0.1.1 devops-playground.htb devops-playground" >> /etc/hosts
 
 # Set timezone and locale
 print_status "Configuring timezone and locale..."
@@ -62,12 +63,12 @@ update-locale LANG=en_US.UTF-8
 
 # 2. Install required packages
 print_status "Installing required packages..."
-apt install -y apache2 php8.1 php8.1-sqlite3 sqlite3 openssh-server sudo curl wget unzip cron
+apt install -y nginx python3 python3-pip python3-venv git docker.io openssh-server sudo curl wget unzip cron
 
-# 3. Configure networking (remove netplan, use interfaces)
+# 3. Configure networking
 print_status "Configuring network interfaces..."
-apt purge -y netplan.io nplan
-rm -rf /etc/netplan/*
+apt purge -y netplan.io nplan 2>/dev/null || true
+rm -rf /etc/netplan/* 2>/dev/null || true
 
 cat > /etc/network/interfaces << 'EOF'
 # interfaces(5) file used by ifup(8) and ifdown(8)
@@ -78,16 +79,18 @@ auto ens33
 iface ens33 inet dhcp
 EOF
 
-# 4. Create users with proper passwords
+# 4. Create users
 print_status "Creating users..."
 
-# Create bookworm user
-useradd -m -s /bin/bash bookworm
-echo "bookworm:MyBooksAreMyTreasure2024" | chpasswd
-usermod -aG sudo bookworm
+# Create developer user
+useradd -m -s /bin/bash developer
+echo "developer:CodePushDeploy2024!" | chpasswd
+
+# Add developer to docker group
+usermod -aG docker developer
 
 # Set root password
-echo "root:LibraryMasterKey2024!" | chpasswd
+echo "root:SecureRootAccess2024!" | chpasswd
 
 # 5. Configure SSH
 print_status "Configuring SSH..."
@@ -95,610 +98,693 @@ sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_
 sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
 systemctl restart ssh
 
-# 6. Configure Apache and PHP
-print_status "Configuring Apache and PHP..."
-systemctl enable apache2
-systemctl start apache2
+# 6. Create directory structure
+print_status "Creating directory structure..."
+mkdir -p /var/www/html
+mkdir -p /opt/deployapi
+mkdir -p /opt/deployments
+mkdir -p /var/log/deployapi
+mkdir -p /tmp/deployments
 
-# Enable PHP module
-a2enmod php8.1
+chown -R developer:developer /opt/deployapi
+chown -R developer:developer /opt/deployments
+chown -R developer:developer /var/log/deployapi
+chown -R developer:developer /tmp/deployments
 
-# Create web directory structure
-mkdir -p /var/www/html/{uploads,css,js}
-chown -R www-data:www-data /var/www/html
-chmod 755 /var/www/html/uploads
+# 7. Create Flask API
+print_status "Creating Flask API..."
 
-# 7. Create the web application files
-print_status "Creating web application..."
+# Create Python virtual environment
+python3 -m venv /opt/deployapi/venv
+source /opt/deployapi/venv/bin/activate
 
-# Main index.php
-cat > /var/www/html/index.php << 'EOF'
-<?php
-$db = new SQLite3('/var/www/library.db');
+# Install Flask
+pip3 install flask gunicorn
 
-// Create table if not exists
-$db->exec('CREATE TABLE IF NOT EXISTS books (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    author TEXT NOT NULL,
-    description TEXT,
-    cover_image TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)');
+# Create Flask application
+cat > /opt/deployapi/app.py << 'EOF'
+from flask import Flask, request, jsonify
+from functools import wraps
+import subprocess
+import os
 
-// Insert sample books if table is empty
-$result = $db->query('SELECT COUNT(*) as count FROM books');
-$row = $result->fetchArray();
-if ($row['count'] == 0) {
-    $sample_books = [
-        ['The Great Gatsby', 'F. Scott Fitzgerald', 'A classic American novel about the Jazz Age'],
-        ['To Kill a Mockingbird', 'Harper Lee', 'A gripping tale of racial injustice and childhood'],
-        ['1984', 'George Orwell', 'A dystopian social science fiction novel'],
-        ['Pride and Prejudice', 'Jane Austen', 'A romantic novel of manners'],
-        ['The Catcher in the Rye', 'J.D. Salinger', 'A controversial coming-of-age story']
-    ];
+app = Flask(__name__)
+
+# Hardcoded credentials (VULNERABLE)
+VALID_USERNAME = "deploy_user"
+VALID_PASSWORD = "D3pl0y_P@ssw0rd_2024!"
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or auth.username != VALID_USERNAME or auth.password != VALID_PASSWORD:
+            return jsonify({"error": "Authentication required"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+@app.route('/')
+def index():
+    return jsonify({
+        "message": "DevOps Deployment API v1.0",
+        "endpoints": [
+            "/api/status",
+            "/api/deploy"
+        ],
+        "note": "Authentication required for deployment endpoints"
+    })
+
+@app.route('/api/status')
+def status():
+    return jsonify({
+        "status": "online",
+        "deployments": 0,
+        "last_deployment": "never"
+    })
+
+@app.route('/api/deploy', methods=['POST'])
+@require_auth
+def deploy():
+    data = request.get_json()
     
-    foreach ($sample_books as $book) {
-        $stmt = $db->prepare('INSERT INTO books (title, author, description) VALUES (?, ?, ?)');
-        $stmt->bindParam(1, $book[0]);
-        $stmt->bindParam(2, $book[1]);
-        $stmt->bindParam(3, $book[2]);
-        $stmt->execute();
-    }
-}
+    if not data or 'file' not in data:
+        return jsonify({"error": "Missing 'file' parameter"}), 400
+    
+    filename = data['file']
+    
+    # VULNERABLE: Command injection!
+    # No input validation or sanitization
+    try:
+        command = f"echo 'Deploying {filename}...' && ls -la /tmp/"
+        result = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT, text=True)
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Deployment initiated for {filename}",
+            "output": result
+        })
+    except subprocess.CalledProcessError as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "output": e.output
+        }), 500
 
-$search = $_GET['search'] ?? '';
-if ($search) {
-    $stmt = $db->prepare('SELECT * FROM books WHERE title LIKE ? OR author LIKE ? ORDER BY created_at DESC');
-    $searchTerm = "%$search%";
-    $stmt->bindParam(1, $searchTerm);
-    $stmt->bindParam(2, $searchTerm);
-    $result = $stmt->execute();
-} else {
-    $result = $db->query('SELECT * FROM books ORDER BY created_at DESC');
-}
-?>
+if __name__ == '__main__':
+    app.run(host='127.0.0.1', port=5000, debug=False)
+EOF
+
+chown developer:developer /opt/deployapi/app.py
+
+deactivate
+
+# 8. Create systemd service for Flask API
+print_status "Creating systemd service for API..."
+
+cat > /etc/systemd/system/deployapi.service << 'EOF'
+[Unit]
+Description=DevOps Deployment API
+After=network.target
+
+[Service]
+Type=simple
+User=developer
+WorkingDirectory=/opt/deployapi
+Environment="PATH=/opt/deployapi/venv/bin"
+ExecStart=/opt/deployapi/venv/bin/python3 /opt/deployapi/app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable deployapi.service
+systemctl start deployapi.service
+
+# 9. Configure Nginx
+print_status "Configuring Nginx..."
+
+# Create main website
+cat > /var/www/html/index.html << 'EOF'
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BookWorm Library - Online Book Catalog</title>
-    <link href="css/style.css" rel="stylesheet">
+    <title>DevOps Playground - Deployment Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2rem;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+        main {
+            flex: 1;
+            max-width: 900px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+        .section {
+            margin: 2rem 0;
+            padding: 1.5rem;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            border-left: 4px solid #4caf50;
+        }
+        h2 {
+            color: #4caf50;
+            margin-bottom: 1rem;
+        }
+        code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.3rem 0.6rem;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+        }
+        .endpoint {
+            margin: 0.5rem 0;
+            padding: 0.8rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 5px;
+        }
+        footer {
+            text-align: center;
+            padding: 1.5rem;
+            background: rgba(0, 0, 0, 0.3);
+            margin-top: auto;
+        }
+    </style>
 </head>
 <body>
     <header>
-        <h1>📚 BookWorm Library</h1>
-        <p>Welcome to our online book catalog</p>
+        <h1>🚀 DevOps Playground</h1>
+        <p>Automated Deployment Dashboard</p>
     </header>
     
-    <nav>
-        <a href="index.php">Home</a>
-        <a href="admin.php">Admin Panel</a>
-    </nav>
-    
     <main>
-        <div class="search-box">
-            <form method="GET">
-                <input type="text" name="search" placeholder="Search books or authors..." value="<?php echo htmlspecialchars($search); ?>">
-                <button type="submit">Search</button>
-            </form>
+        <div class="section">
+            <h2>📡 API Documentation</h2>
+            <p>Our deployment API allows you to manage application deployments programmatically.</p>
+            <div class="endpoint">
+                <strong>GET</strong> <code>/api/</code> - API Information
+            </div>
+            <div class="endpoint">
+                <strong>GET</strong> <code>/api/status</code> - Check deployment status
+            </div>
+            <div class="endpoint">
+                <strong>POST</strong> <code>/api/deploy</code> - Initiate deployment (Auth required)
+            </div>
         </div>
         
-        <div class="books-grid">
-            <?php while ($book = $result->fetchArray(SQLITE3_ASSOC)): ?>
-            <div class="book-card">
-                <div class="book-cover">
-                    <?php if ($book['cover_image']): ?>
-                        <img src="uploads/<?php echo htmlspecialchars($book['cover_image']); ?>" alt="Book cover">
-                    <?php else: ?>
-                        <div class="no-cover">📖</div>
-                    <?php endif; ?>
-                </div>
-                <div class="book-info">
-                    <h3><?php echo htmlspecialchars($book['title']); ?></h3>
-                    <p class="author">by <?php echo htmlspecialchars($book['author']); ?></p>
-                    <p class="description"><?php echo htmlspecialchars($book['description']); ?></p>
-                </div>
-            </div>
-            <?php endwhile; ?>
+        <div class="section">
+            <h2>📚 Resources</h2>
+            <p>Check out our deployment scripts and configurations in the <code>/deployments</code> directory.</p>
+            <p>API documentation is available at <code>/docs</code></p>
+        </div>
+        
+        <div class="section">
+            <h2>⚙️ System Status</h2>
+            <p>All systems operational</p>
+            <p>Last deployment: Never</p>
         </div>
     </main>
     
     <footer>
-        <p>&copy; 2024 BookWorm Library. Managed with love by our dedicated librarian.</p>
+        <p>&copy; 2024 DevOps Playground. Built with ❤️ by the Dev Team.</p>
     </footer>
 </body>
 </html>
 EOF
 
-# Admin panel with vulnerable file upload
-cat > /var/www/html/admin.php << 'EOF'
-<?php
-$message = '';
-
-if ($_POST) {
-    $title = $_POST['title'] ?? '';
-    $author = $_POST['author'] ?? '';
-    $description = $_POST['description'] ?? '';
-    
-    $cover_image = '';
-    if (isset($_FILES['cover']) && $_FILES['cover']['error'] === UPLOAD_ERR_OK) {
-        $upload_dir = 'uploads/';
-        $original_name = $_FILES['cover']['name'];
-        
-        // VULNERABLE: Only basic client-side validation, server accepts any file
-        $cover_image = time() . '_' . $original_name;
-        $upload_path = $upload_dir . $cover_image;
-        
-        if (move_uploaded_file($_FILES['cover']['tmp_name'], $upload_path)) {
-            chmod($upload_path, 0644);
-        } else {
-            $cover_image = '';
-        }
-    }
-    
-    if ($title && $author) {
-        $db = new SQLite3('/var/www/library.db');
-        $stmt = $db->prepare('INSERT INTO books (title, author, description, cover_image) VALUES (?, ?, ?, ?)');
-        $stmt->bindParam(1, $title);
-        $stmt->bindParam(2, $author);
-        $stmt->bindParam(3, $description);
-        $stmt->bindParam(4, $cover_image);
-        
-        if ($stmt->execute()) {
-            $message = '<div class="success">Book added successfully!</div>';
-        } else {
-            $message = '<div class="error">Failed to add book.</div>';
-        }
-    } else {
-        $message = '<div class="error">Title and author are required.</div>';
-    }
-}
-?>
+# Create docs directory
+mkdir -p /var/www/html/docs
+cat > /var/www/html/docs/index.html << 'EOF'
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Panel - BookWorm Library</title>
-    <link href="css/style.css" rel="stylesheet">
+    <title>API Documentation</title>
+    <style>
+        body { font-family: monospace; padding: 2rem; background: #1e1e1e; color: #fff; }
+        h1 { color: #4caf50; }
+        code { background: #333; padding: 0.2rem 0.5rem; border-radius: 3px; }
+    </style>
 </head>
 <body>
-    <header>
-        <h1>📚 Admin Panel</h1>
-        <p>Add new books to the library</p>
-    </header>
-    
-    <nav>
-        <a href="index.php">Back to Catalog</a>
-    </nav>
-    
-    <main>
-        <?php echo $message; ?>
-        
-        <form method="POST" enctype="multipart/form-data" class="admin-form">
-            <div class="form-group">
-                <label for="title">Book Title *</label>
-                <input type="text" id="title" name="title" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="author">Author *</label>
-                <input type="text" id="author" name="author" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="description">Description</label>
-                <textarea id="description" name="description" rows="4"></textarea>
-            </div>
-            
-            <div class="form-group">
-                <label for="cover">Book Cover Image</label>
-                <input type="file" id="cover" name="cover" accept="image/*" onchange="validateFile()">
-                <small>Accepted formats: JPG, JPEG, PNG, GIF</small>
-            </div>
-            
-            <button type="submit">Add Book</button>
-        </form>
-    </main>
-    
-    <script>
-        // CLIENT-SIDE ONLY validation (vulnerable!)
-        function validateFile() {
-            var fileInput = document.getElementById('cover');
-            var file = fileInput.files[0];
-            
-            if (file) {
-                var allowedExtensions = ['jpg', 'jpeg', 'png', 'gif'];
-                var fileName = file.name.toLowerCase();
-                var fileExtension = fileName.split('.').pop();
-                
-                if (!allowedExtensions.includes(fileExtension)) {
-                    alert('Please select a valid image file (JPG, JPEG, PNG, GIF)');
-                    fileInput.value = '';
-                }
-            }
-        }
-    </script>
+    <h1>Deployment API Documentation</h1>
+    <p>For internal use only. Authentication required.</p>
+    <p>Contact the development team for credentials.</p>
 </body>
 </html>
 EOF
 
-# CSS file
-cat > /var/www/html/css/style.css << 'EOF'
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
-
-body {
-    font-family: 'Georgia', serif;
-    line-height: 1.6;
-    color: #333;
-    background-color: #f4f4f4;
-}
-
-header {
-    background: linear-gradient(135deg, #8B4513, #D2691E);
-    color: white;
-    text-align: center;
-    padding: 2rem;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-}
-
-header h1 {
-    font-size: 2.5rem;
-    margin-bottom: 0.5rem;
-}
-
-nav {
-    background: #654321;
-    padding: 1rem;
-    text-align: center;
-}
-
-nav a {
-    color: white;
-    text-decoration: none;
-    margin: 0 1rem;
-    padding: 0.5rem 1rem;
-    border-radius: 5px;
-    transition: background 0.3s;
-}
-
-nav a:hover {
-    background: rgba(255,255,255,0.2);
-}
-
-main {
-    max-width: 1200px;
-    margin: 2rem auto;
-    padding: 0 2rem;
-}
-
-.search-box {
-    text-align: center;
-    margin-bottom: 2rem;
-}
-
-.search-box input {
-    padding: 0.8rem;
-    font-size: 1rem;
-    border: 2px solid #ddd;
-    border-radius: 25px;
-    width: 300px;
-    margin-right: 0.5rem;
-}
-
-.search-box button {
-    padding: 0.8rem 1.5rem;
-    font-size: 1rem;
-    background: #8B4513;
-    color: white;
-    border: none;
-    border-radius: 25px;
-    cursor: pointer;
-}
-
-.books-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 2rem;
-    margin: 2rem 0;
-}
-
-.book-card {
-    background: white;
-    border-radius: 10px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    overflow: hidden;
-    transition: transform 0.3s;
-}
-
-.book-card:hover {
-    transform: translateY(-5px);
-}
-
-.book-cover {
-    height: 200px;
-    background: #f8f8f8;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.book-cover img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: cover;
-}
-
-.no-cover {
-    font-size: 4rem;
-    color: #ccc;
-}
-
-.book-info {
-    padding: 1.5rem;
-}
-
-.book-info h3 {
-    color: #8B4513;
-    margin-bottom: 0.5rem;
-}
-
-.author {
-    font-style: italic;
-    color: #666;
-    margin-bottom: 0.5rem;
-}
-
-.description {
-    color: #555;
-    font-size: 0.9rem;
-}
-
-.admin-form {
-    max-width: 600px;
-    margin: 0 auto;
-    background: white;
-    padding: 2rem;
-    border-radius: 10px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-}
-
-.form-group {
-    margin-bottom: 1.5rem;
-}
-
-.form-group label {
-    display: block;
-    margin-bottom: 0.5rem;
-    font-weight: bold;
-    color: #8B4513;
-}
-
-.form-group input,
-.form-group textarea {
-    width: 100%;
-    padding: 0.8rem;
-    border: 2px solid #ddd;
-    border-radius: 5px;
-    font-size: 1rem;
-}
-
-.form-group small {
-    color: #666;
-    font-size: 0.8rem;
-}
-
-.admin-form button {
-    width: 100%;
-    padding: 1rem;
-    font-size: 1.1rem;
-    background: #8B4513;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    transition: background 0.3s;
-}
-
-.admin-form button:hover {
-    background: #654321;
-}
-
-.success {
-    background: #d4edda;
-    color: #155724;
-    padding: 1rem;
-    border-radius: 5px;
-    margin-bottom: 1rem;
-    border: 1px solid #c3e6cb;
-}
-
-.error {
-    background: #f8d7da;
-    color: #721c24;
-    padding: 1rem;
-    border-radius: 5px;
-    margin-bottom: 1rem;
-    border: 1px solid #f5c6cb;
-}
-
-footer {
-    text-align: center;
-    padding: 2rem;
-    background: #333;
-    color: white;
-    margin-top: 3rem;
+# Configure Nginx
+cat > /etc/nginx/sites-available/default << 'EOF'
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    
+    root /var/www/html;
+    index index.html;
+    
+    server_name _;
+    
+    location / {
+        try_files $uri $uri/ =404;
+    }
+    
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    
+    location /deployments {
+        alias /opt/deployments;
+        autoindex off;
+    }
 }
 EOF
 
-# 8. Set up database with proper permissions
-print_status "Setting up SQLite database..."
-touch /var/www/library.db
-chown www-data:www-data /var/www/library.db
-chmod 664 /var/www/library.db
+# Test and restart Nginx
+nginx -t
+systemctl restart nginx
+systemctl enable nginx
 
-# 9. Configure sudo permissions for privilege escalation
-print_status "Configuring sudo permissions..."
+# 10. Create Git repository with vulnerable history
+print_status "Creating Git repository with credentials..."
 
-# Create a simple Python script for bookworm user
-cat > /var/www/add_book.py << 'EOF'
-#!/usr/bin/env python3
-import sqlite3
-import sys
+cd /opt/deployments
 
-def add_book(title, author, description=""):
-    conn = sqlite3.connect('/var/www/library.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('INSERT INTO books (title, author, description) VALUES (?, ?, ?)',
-                   (title, author, description))
-    conn.commit()
-    conn.close()
-    print(f"Book '{title}' by {author} added successfully!")
+# Initialize git repo
+sudo -u developer git init
+sudo -u developer git config user.email "dev@devops-playground.htb"
+sudo -u developer git config user.name "developer"
 
-if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python3 add_book.py <title> <author> [description]")
-        sys.exit(1)
-    
-    title = sys.argv[1]
-    author = sys.argv[2]
-    description = sys.argv[3] if len(sys.argv) > 3 else ""
-    
-    add_book(title, author, description)
+# Create initial files
+cat > README.md << 'EOF'
+# Deployment Scripts
+
+This repository contains our deployment automation scripts.
+
+## Usage
+
+Use the API to trigger deployments. See `/docs` for more information.
 EOF
 
-chmod +x /var/www/add_book.py
-chown bookworm:bookworm /var/www/add_book.py
-
-# Configure sudo permissions
-cat > /etc/sudoers.d/bookworm << 'EOF'
-# Allow www-data to run the add_book script as bookworm
-www-data ALL=(bookworm) NOPASSWD: /usr/bin/python3 /var/www/add_book.py
-
-# Allow bookworm to run pip3 as root (VULNERABLE for privilege escalation)
-bookworm ALL=(root) NOPASSWD: /usr/bin/pip3
+cat > deploy.sh << 'EOF'
+#!/bin/bash
+# Simple deployment script
+echo "Deploying application..."
 EOF
 
-# 10. Set up cron jobs for cleanup and maintenance
+chmod +x deploy.sh
+
+# First commit
+sudo -u developer git add README.md deploy.sh
+sudo -u developer git commit -m "Initial commit"
+
+# Create config with credentials (this will be "removed" later)
+cat > config.yaml << 'EOF'
+api:
+  endpoint: "http://localhost:5000"
+  username: "deploy_user"
+  password: "D3pl0y_P@ssw0rd_2024!"
+deployment:
+  path: "/tmp/deployments"
+  timeout: 300
+EOF
+
+sudo -u developer git add config.yaml
+sudo -u developer git commit -m "Add deployment configuration"
+
+# "Remove" credentials (but they stay in history)
+cat > config.yaml << 'EOF'
+api:
+  endpoint: "http://localhost:5000"
+  username: "REDACTED"
+  password: "REDACTED"
+deployment:
+  path: "/tmp/deployments"
+  timeout: 300
+EOF
+
+sudo -u developer git add config.yaml
+sudo -u developer git commit -m "Remove sensitive credentials from config"
+
+# Make .git accessible via web (VULNERABLE)
+chmod -R 755 /opt/deployments/.git
+
+cd /root
+
+# 11. Setup Docker
+print_status "Configuring Docker..."
+
+systemctl enable docker
+systemctl start docker
+
+# Pull Ubuntu image
+docker pull ubuntu:latest
+
+# 12. Set up cron jobs
 print_status "Setting up cron jobs..."
 
-# Cleanup uploaded files
-cat > /etc/cron.d/bookworm-cleanup << 'EOF'
-# Clean old uploaded files every 10 minutes
-*/10 * * * * www-data find /var/www/html/uploads -type f -mmin +60 -delete 2>/dev/null
-
-# Daily database backup
-0 2 * * * bookworm cp /var/www/library.db /home/bookworm/library_backup.db 2>/dev/null
+cat > /etc/cron.d/devops-logrotate << 'EOF'
+# Rotate API logs daily
+0 0 * * * developer /usr/bin/find /var/log/deployapi -name "*.log" -mtime +7 -delete 2>/dev/null
 EOF
 
-# 11. Create and place flags
+cat > /etc/cron.d/devops-cleanup << 'EOF'
+# Clean old deployment files every hour
+0 * * * * developer /usr/bin/find /tmp/deployments -type f -mmin +60 -delete 2>/dev/null
+EOF
+
+chmod 644 /etc/cron.d/devops-logrotate
+chmod 644 /etc/cron.d/devops-cleanup
+
+# 13. Create and place flags
 print_status "Creating flags..."
 
 # Generate MD5 flags
-USER_FLAG=$(echo -n "BookWorm_User_$(date +%s)" | md5sum | cut -d' ' -f1)
-ROOT_FLAG=$(echo -n "BookWorm_Root_$(date +%s)" | md5sum | cut -d' ' -f1)
+USER_FLAG=$(echo -n "DevOps_User_$(date +%s)" | md5sum | cut -d' ' -f1)
+ROOT_FLAG=$(echo -n "DevOps_Root_$(date +%s)" | md5sum | cut -d' ' -f1)
 
 # Place user flag
-echo "$USER_FLAG" > /home/bookworm/user.txt
-chown root:bookworm /home/bookworm/user.txt
-chmod 644 /home/bookworm/user.txt
+echo "$USER_FLAG" > /home/developer/user.txt
+chown root:developer /home/developer/user.txt
+chmod 644 /home/developer/user.txt
 
 # Place root flag
 echo "$ROOT_FLAG" > /root/root.txt
 chown root:root /root/root.txt
 chmod 640 /root/root.txt
 
-# 12. Secure history files
+# 14. Secure history files
 print_status "Securing history files..."
 
 # Redirect history to /dev/null for all users
 echo 'export HISTFILE=/dev/null' >> /etc/profile
-echo 'export HISTFILE=/dev/null' >> /home/bookworm/.bashrc
+echo 'export HISTFILE=/dev/null' >> /home/developer/.bashrc
 echo 'export HISTFILE=/dev/null' >> /root/.bashrc
 
 # Remove existing history
-rm -f /home/bookworm/.bash_history
+rm -f /home/developer/.bash_history
 rm -f /root/.bash_history
-rm -f /home/bookworm/.mysql_history
-rm -f /root/.mysql_history
-rm -f /home/bookworm/.viminfo
+rm -f /home/developer/.python_history
+rm -f /root/.python_history
+rm -f /home/developer/.viminfo
 rm -f /root/.viminfo
 
 # Create immutable empty history files
-touch /home/bookworm/.bash_history /root/.bash_history
-chattr +i /home/bookworm/.bash_history /root/.bash_history 2>/dev/null || true
+touch /home/developer/.bash_history /root/.bash_history
+chown developer:developer /home/developer/.bash_history
+chattr +i /home/developer/.bash_history /root/.bash_history 2>/dev/null || true
 
-# 13. Final security hardening
+# 15. Final permissions and ownership
+print_status "Setting final permissions..."
+
+# Web files
+chown -R www-data:www-data /var/www/html
+find /var/www/html -type f -exec chmod 644 {} \;
+find /var/www/html -type d -exec chmod 755 {} \;
+
+# API files
+chown -R developer:developer /opt/deployapi
+chmod 755 /opt/deployapi
+chmod 644 /opt/deployapi/app.py
+
+# Git repository
+chown -R developer:developer /opt/deployments
+chmod -R 755 /opt/deployments
+
+# Log directories
+chown -R developer:developer /var/log/deployapi
+chmod 755 /var/log/deployapi
+
+# 16. Security hardening
 print_status "Applying security hardening..."
 
 # Disable unnecessary services
 systemctl disable bluetooth 2>/dev/null || true
 systemctl disable cups 2>/dev/null || true
+systemctl disable avahi-daemon 2>/dev/null || true
 
-# Set proper permissions
-find /var/www/html -type f -exec chmod 644 {} \;
-find /var/www/html -type d -exec chmod 755 {} \;
-chmod 755 /var/www/html/uploads
-
-# Restart services
-systemctl restart apache2
+# Ensure services are running
+systemctl restart nginx
+systemctl restart deployapi.service
+systemctl restart docker
 systemctl restart cron
+systemctl restart ssh
 
-# 14. Create machine info file
-print_status "Creating machine information..."
+# 17. Verify services
+print_status "Verifying services..."
+
+sleep 3
+
+# Check Nginx
+if systemctl is-active --quiet nginx; then
+    print_success "Nginx is running"
+else
+    print_error "Nginx failed to start"
+fi
+
+# Check API
+if systemctl is-active --quiet deployapi.service; then
+    print_success "DeployAPI is running"
+else
+    print_error "DeployAPI failed to start"
+fi
+
+# Check Docker
+if systemctl is-active --quiet docker; then
+    print_success "Docker is running"
+else
+    print_error "Docker failed to start"
+fi
+
+# Check SSH
+if systemctl is-active --quiet ssh; then
+    print_success "SSH is running"
+else
+    print_error "SSH failed to start"
+fi
+
+# Test API endpoint
+if curl -s http://localhost:5000/ | grep -q "DevOps Deployment API"; then
+    print_success "API endpoint responding correctly"
+else
+    print_warning "API endpoint may not be responding correctly"
+fi
+
+# Test Nginx
+if curl -s http://localhost/ | grep -q "DevOps Playground"; then
+    print_success "Nginx serving website correctly"
+else
+    print_warning "Nginx may not be serving correctly"
+fi
+
+# 18. Create machine info file
+print_status "Creating machine information file..."
 
 cat > /root/machine_info.txt << EOF
-================================================
-BookWorm HTB Machine Information
-================================================
+==========================================================
+DevOps-Playground HTB Machine Information
+==========================================================
 
 Machine Type: Easy
 OS: Ubuntu Server 22.04 LTS
-Hostname: bookworm.htb
+Hostname: devops-playground.htb
 
 CREDENTIALS:
-- User: bookworm | Password: MyBooksAreMyTreasure2024
-- Root: root | Password: LibraryMasterKey2024!
+- User: developer | Password: CodePushDeploy2024!
+- Root: root | Password: SecureRootAccess2024!
+
+API CREDENTIALS (found in Git history):
+- Username: deploy_user
+- Password: D3pl0y_P@ssw0rd_2024!
 
 FLAGS:
-- User Flag: $USER_FLAG (located in /home/bookworm/user.txt)
+- User Flag: $USER_FLAG (located in /home/developer/user.txt)
 - Root Flag: $ROOT_FLAG (located in /root/root.txt)
 
 SERVICES:
-- HTTP (Port 80): Apache2 with PHP Library Management App
+- HTTP (Port 80): Nginx reverse proxy + static site
+- API (Port 5000): Flask deployment API (internal only)
 - SSH (Port 22): Standard OpenSSH
+- Docker: unix socket (/var/run/docker.sock)
 
 EXPLOITATION PATH:
-1. Web Enumeration → Find admin.php
-2. File Upload Vulnerability → Upload PHP webshell
-3. Lateral Movement → sudo python3 script as bookworm
-4. Privilege Escalation → sudo pip3 as root
+1. Web Enumeration → Find /deployments/.git exposed
+2. Git Dumping → Extract credentials from commit history
+3. API Testing → Discover command injection in /api/deploy
+4. Foothold → Execute reverse shell via command injection
+5. Privilege Escalation → Abuse docker group membership
 
 INTENDED VULNERABILITIES:
-- Unrestricted file upload in /admin.php
-- Sudo misconfiguration for pip3
+- Exposed .git directory with credentials in history
+- Command injection in Flask API /api/deploy endpoint
+- Developer user in docker group (privilege escalation)
+
+TESTING CHECKLIST:
+□ Port scan shows 22 and 80 open
+□ Website loads at http://IP/
+□ API responds at http://IP/api/
+□ Git repository accessible at http://IP/deployments/.git/
+□ Git history contains credentials
+□ API accepts credentials and executes commands
+□ Command injection works for reverse shell
+□ Docker command works as developer user
+□ Docker privilege escalation to root works
+
+USEFUL COMMANDS FOR TESTING:
+# Test API without auth
+curl http://localhost/api/
+
+# Test API with auth
+curl -u deploy_user:D3pl0y_P@ssw0rd_2024! http://localhost/api/deploy -X POST -H "Content-Type: application/json" -d '{"file":"test"}'
+
+# Test command injection
+curl -u deploy_user:D3pl0y_P@ssw0rd_2024! http://localhost/api/deploy -X POST -H "Content-Type: application/json" -d '{"file":"test; id"}'
+
+# Dump git repo
+git-dumper http://localhost/deployments/.git/ /tmp/repo
+
+# Check git history
+cd /tmp/repo && git log --oneline && git show [commit]
+
+# Test docker access as developer
+su - developer
+docker ps
+docker run -v /:/mnt --rm -it ubuntu chroot /mnt sh
 
 Created: $(date)
-================================================
+==========================================================
 EOF
 
-print_success "BookWorm HTB machine setup completed successfully!"
+chmod 600 /root/machine_info.txt
+
+# 19. Create test script for validation
+print_status "Creating validation test script..."
+
+cat > /root/test_machine.sh << 'EOF'
+#!/bin/bash
+
+echo "=========================================="
+echo "DevOps-Playground Machine Validation Test"
+echo "=========================================="
+echo ""
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+test_count=0
+pass_count=0
+
+run_test() {
+    test_count=$((test_count + 1))
+    echo -n "Test $test_count: $1... "
+    if eval "$2" > /dev/null 2>&1; then
+        echo -e "${GREEN}PASS${NC}"
+        pass_count=$((pass_count + 1))
+        return 0
+    else
+        echo -e "${RED}FAIL${NC}"
+        return 1
+    fi
+}
+
+# Run tests
+run_test "Nginx is running" "systemctl is-active --quiet nginx"
+run_test "DeployAPI is running" "systemctl is-active --quiet deployapi.service"
+run_test "Docker is running" "systemctl is-active --quiet docker"
+run_test "SSH is running" "systemctl is-active --quiet ssh"
+run_test "Website accessible" "curl -s http://localhost/ | grep -q 'DevOps Playground'"
+run_test "API accessible" "curl -s http://localhost/api/ | grep -q 'DevOps Deployment API'"
+run_test "Git repo exists" "test -d /opt/deployments/.git"
+run_test "Git has commits" "cd /opt/deployments && git log | grep -q 'credentials'"
+run_test "User flag exists" "test -f /home/developer/user.txt"
+run_test "Root flag exists" "test -f /root/root.txt"
+run_test "Developer in docker group" "groups developer | grep -q docker"
+run_test "Ubuntu docker image exists" "docker images | grep -q ubuntu"
+
+echo ""
+echo "=========================================="
+echo "Results: $pass_count/$test_count tests passed"
+echo "=========================================="
+
+if [ $pass_count -eq $test_count ]; then
+    echo -e "${GREEN}All tests passed! Machine is ready.${NC}"
+    exit 0
+else
+    echo -e "${RED}Some tests failed. Check the configuration.${NC}"
+    exit 1
+fi
+EOF
+
+chmod +x /root/test_machine.sh
+
+# 20. Run validation tests
+print_status "Running validation tests..."
+echo ""
+
+/root/test_machine.sh
+
+echo ""
+print_success "=========================================="
+print_success "DevOps-Playground setup completed!"
+print_success "=========================================="
+echo ""
 print_warning "Important Information:"
+echo ""
 echo -e "  ${YELLOW}User Flag:${NC} $USER_FLAG"
 echo -e "  ${YELLOW}Root Flag:${NC} $ROOT_FLAG"
 echo ""
+echo -e "  ${YELLOW}SSH Access:${NC} ssh developer@[IP]"
+echo -e "  ${YELLOW}Password:${NC} CodePushDeploy2024!"
+echo ""
+echo -e "  ${YELLOW}API Credentials (in Git history):${NC}"
+echo -e "  Username: deploy_user"
+echo -e "  Password: D3pl0y_P@ssw0rd_2024!"
+echo ""
 print_warning "Next Steps:"
 echo "1. Shutdown the VM: sudo shutdown -h now"
-echo "2. Take a VM snapshot"
-echo "3. Configure VM settings: 2GB RAM, 2 CPU cores"
-echo "4. Test the exploitation path"
-echo "5. Create documentation package for HTB submission"
+echo "2. Take a VM snapshot (clean state)"
+echo "3. Configure VM: 2GB RAM, 2 CPU cores"
+echo "4. Test the full exploitation path"
+echo "5. Take screenshots for writeup"
+echo "6. Package everything for HTB submission"
 echo ""
-print_success "Machine is ready for testing and HTB submission!"
+print_warning "Testing Commands:"
+echo "  Test website: curl http://localhost/"
+echo "  Test API: curl http://localhost/api/"
+echo "  Run tests: /root/test_machine.sh"
+echo ""
+print_success "Machine is ready for HTB submission!"
+print_success "Check /root/machine_info.txt for detailed information"
+echo ""
