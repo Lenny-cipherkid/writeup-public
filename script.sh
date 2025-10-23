@@ -1,4 +1,4 @@
-r#!/bin/bash
+#!/bin/bash
 
 # Script de correction du dépôt Git
 # Exécute en tant que root
