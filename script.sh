@@ -1,13 +1,3 @@
-# Connecte-toi en root
-sudo su -
-
-# Va dans le dépôt
-cd /opt/deployments
-
-# Vérifie l'historique Git
-git log
-
-# Si le dépôt est vide ou mal configuré, recrée-le :
 rm -rf .git
 sudo -u developer git init
 sudo -u developer git config user.email "dev@devops-playground.htb"
